@@ -17,7 +17,10 @@ public static class ServiceRegistration
     {
         services.AddOptions<SolidesDpOptions>().Bind(configuration.GetSection(SolidesDpOptions.SectionName)).ValidateOnStart();
         services.AddOptions<ExecutionOptions>().Bind(configuration.GetSection(ExecutionOptions.SectionName)).ValidateOnStart();
-        services.AddOptions<SyncOptions>().Bind(configuration.GetSection(SyncOptions.SectionName)).ValidateOnStart();
+        services.AddOptions<SyncOptions>()
+            .Bind(configuration.GetSection(SyncOptions.SectionName))
+            .PostConfigure(options => ReplaceConfiguredLists(options, configuration.GetSection(SyncOptions.SectionName)))
+            .ValidateOnStart();
         services.AddSingleton<IValidateOptions<SolidesDpOptions>, SolidesDpOptionsValidator>();
         services.AddSingleton<IValidateOptions<ExecutionOptions>, ExecutionOptionsValidator>();
         services.AddSingleton<IValidateOptions<SyncOptions>, SyncOptionsValidator>();
@@ -60,5 +63,23 @@ public static class ServiceRegistration
         services.AddSingleton<TextWriter>(Console.Out);
         services.AddTransient<OperatorCommands>();
         return services;
+    }
+
+    /// <summary>
+    /// O ConfigurationBinder ACRESCENTA itens a listas já inicializadas: com o padrão [1, 2] e
+    /// "TiposColaborador": [1] no appsettings o resultado seria [1, 2, 1]. Lista configurada
+    /// substitui o padrão.
+    /// </summary>
+    internal static void ReplaceConfiguredLists(SyncOptions options, IConfiguration section)
+    {
+        if (section.GetSection(nameof(SyncOptions.TiposColaborador)).Exists())
+        {
+            options.TiposColaborador = section.GetSection(nameof(SyncOptions.TiposColaborador)).Get<List<int>>() ?? [];
+        }
+
+        if (section.GetSection(nameof(SyncOptions.SituacoesIgnoradas)).Exists())
+        {
+            options.SituacoesIgnoradas = section.GetSection(nameof(SyncOptions.SituacoesIgnoradas)).Get<List<string>>() ?? [];
+        }
     }
 }

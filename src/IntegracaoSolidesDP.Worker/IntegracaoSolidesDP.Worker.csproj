@@ -5,6 +5,9 @@
     <AssemblyName>IntegracaoSolidesDP</AssemblyName>
     <UserSecretsId>integracao-solidesdp-worker</UserSecretsId>
     <InvariantGlobalization>false</InvariantGlobalization>
+    <!-- Plataformas dos pacotes do release (e osx-arm64 para smoke local). Declaradas aqui para
+         o packages.lock.json cobrir todas: publicar com -r não pode alterar o lock file. -->
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>

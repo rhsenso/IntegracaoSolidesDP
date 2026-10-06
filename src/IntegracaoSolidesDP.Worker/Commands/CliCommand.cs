@@ -9,6 +9,7 @@ public enum CliMode
     Discover,
     CheckConfig,
     Reconcile,
+    Version,
 }
 
 /// <summary>Comandos do executável. Os demais argumentos seguem para a configuração (ex.: --Sync:DryRun=false).</summary>
@@ -38,6 +39,9 @@ public sealed record CliCommand(CliMode Mode, bool Repair, string[] HostArgs)
                     break;
                 case "--reconcile":
                     mode = CliMode.Reconcile;
+                    break;
+                case "--version":
+                    mode = CliMode.Version;
                     break;
                 case "--repair":
                     repair = true;
@@ -71,6 +75,7 @@ public sealed record CliCommand(CliMode Mode, bool Repair, string[] HostArgs)
           --dry-run        uma execução simulada (sem chamar a API) e gera o relatório
           --run-once       uma execução com a configuração atual (Sync:DryRun decide se é real)
           --reconcile      confere no DP os colaboradores já enviados; com --repair força o reenvio dos ausentes
+          --version        mostra a versão instalada
 
         Qualquer chave de configuração pode ser passada como --Secao:Chave=valor.
         """;

@@ -97,6 +97,24 @@ Cada execução grava o seguinte:
 - `reports/run-*.csv`, que abre no Excel, e `reports/run-*.json`;
 - logs em `logs/`.
 
+## Publicação (CI/CD)
+
+Cada push na `main` dispara o workflow [`ci`](.github/workflows/ci.yml), sem pull request:
+
+1. **Testes:** unitários, de contrato, de SQL e ponta a ponta contra o fake.
+2. **Pacotes:**
+   - `win-x64.zip`: serviço Windows, com os scripts `install-service.ps1` e `uninstall-service.ps1`;
+   - `linux-x64.tar.gz`: systemd, com `install.sh`, `uninstall.sh` e a unit;
+   - `SHA256SUMS.txt`.
+3. **Smoke test dos pacotes instalados de verdade:**
+   - **Windows:** o serviço é instalado, atualizado (sem perder o `appsettings.json`) e removido num runner Windows.
+   - **Linux:** o binário e a imagem Docker rodam contra SQL Server + fake (`check-config`, `dry-run`, execução real e uma segunda execução que não pode escrever nada). Depois o pacote é instalado, atualizado e removido via systemd.
+4. **Release:** só se tudo passar. Cria a tag `v<VersionPrefix>.<número da execução>` (ex.: `v1.0.12`), com os pacotes e notas, e publica a imagem `ghcr.io/rhsenso/integracaosolidesdp:<versão>` / `latest`.
+
+- **Versão maior ou menor:** altere `VersionPrefix` no `Directory.Build.props`.
+- **Instalação na ADN:** veja o [INSTALL.md](INSTALL.md).
+- **Smoke local:** `scripts/smoke-package.sh binary <pasta-publicada>` ou `scripts/smoke-package.sh docker <imagem>`.
+
 ## Sem homologação: o fake da API
 
 O Sólides DP **não tem ambiente de homologação**. Por isso todo o desenvolvimento e os testes rodam contra um fake da API, `src/SolidesDP.Fake`. Ele guarda estado, segue o Swagger do fornecedor, tem perfis para os comportamentos que a documentação não define e permite injetar falhas. Detalhes em [src/SolidesDP.Fake/README.md](src/SolidesDP.Fake/README.md).
@@ -113,7 +131,7 @@ dotnet test                                                                   # 
 - **Testes de contrato.** Garantem que todo campo, enum e parâmetro enviado existe no Swagger vendorizado (`spec/tangerino-employer.json`). Para atualizar o Swagger: `scripts/update-spec.sh`.
 - **Testes de SQL e ponta a ponta.** Usam Testcontainers, então precisam de Docker.
 
-## Pendências com Carlos / Claudio / Sólides
+## Para a implantação na ADN (não bloqueia desenvolvimento nem testes, que usam o fake)
 
 - **Token** de integração do DP da ADN.
 - **Conta de teste/trial** do DP para servir de sandbox, já que não há homologação.

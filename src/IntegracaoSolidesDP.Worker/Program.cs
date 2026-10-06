@@ -2,10 +2,21 @@ using IntegracaoSolidesDP.Worker.Commands;
 using IntegracaoSolidesDP.Worker.Infrastructure;
 using IntegracaoSolidesDP.Worker.Pipeline;
 using IntegracaoSolidesDP.Worker.Scheduling;
+using System.Reflection;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Serilog.Settings.Configuration;
+
+// Como serviço Windows o diretório corrente é System32: caminhos relativos (logs/, reports/)
+// passam a ser relativos ao executável, em qualquer forma de execução.
+Directory.SetCurrentDirectory(AppContext.BaseDirectory);
 
 var command = CliCommand.Parse(args);
+if (command.Mode == CliMode.Version)
+{
+    Console.WriteLine(ProductVersion());
+    return 0;
+}
 
 var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {
@@ -16,8 +27,12 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 
 builder.Services.AddWindowsService(options => options.ServiceName = "IntegracaoSolidesDP");
 builder.Services.AddSystemd();
+// Assemblies dos sinks passados explicitamente: no executável single-file o Serilog não
+// consegue descobri-los pelo "Using" do appsettings.
 builder.Services.AddSerilog((services, logger) => logger
-    .ReadFrom.Configuration(builder.Configuration)
+    .ReadFrom.Configuration(builder.Configuration, new ConfigurationReaderOptions(
+        typeof(ConsoleLoggerConfigurationExtensions).Assembly,
+        typeof(FileLoggerConfigurationExtensions).Assembly))
     .Enrich.FromLogContext());
 
 builder.Services.AddIntegracaoSolidesDP(builder.Configuration);
@@ -77,3 +92,7 @@ switch (command.Mode)
         Console.WriteLine($"{summary.Status} — relatório: {summary.ReportPath}");
         return summary.Status is "completed" ? 0 : 1;
 }
+
+static string ProductVersion() =>
+    typeof(CliCommand).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
+    ?? "desconhecida";

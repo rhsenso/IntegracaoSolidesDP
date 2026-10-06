@@ -11,6 +11,16 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
+  <!--
+    Versão: o CI publica MAJOR.MINOR.<número da execução> a cada push na main (tag v1.0.N).
+    Para subir major/minor, altere VersionPrefix aqui.
+  -->
+  <PropertyGroup>
+    <VersionPrefix>1.0</VersionPrefix>
+    <Company>RHSenso</Company>
+    <Product>IntegracaoSolidesDP</Product>
+  </PropertyGroup>
+
   <!-- O build tem que ficar limpo: qualquer warning vira erro. -->
   <PropertyGroup>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

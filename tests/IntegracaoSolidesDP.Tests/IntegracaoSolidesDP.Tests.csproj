@@ -30,6 +30,7 @@
   <ItemGroup>
     <!-- Swagger do fornecedor, vendorizado: mudança de contrato aparece como diff. -->
     <Content Include="..\..\spec\tangerino-employer.json" Link="Contracts\tangerino-employer.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\smoke\rhu-schema.sql" Link="Sql\rhu-schema.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

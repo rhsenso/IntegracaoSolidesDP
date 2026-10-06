@@ -11,6 +11,10 @@ indent_size = 4
 [*.{json,yml,yaml,csproj,props,targets,http}]
 indent_size = 2
 
+[*.ps1]
+# BOM: o Windows PowerShell 5.1 (padrão no Windows Server) lê UTF-8 sem BOM como ANSI.
+charset = utf-8-bom
+
 [*.md]
 trim_trailing_whitespace = false
 

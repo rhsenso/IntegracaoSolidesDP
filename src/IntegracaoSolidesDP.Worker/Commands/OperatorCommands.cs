@@ -25,6 +25,10 @@ public sealed class OperatorCommands(
         var ok = true;
         var sync = syncOptions.Value;
         var execution = executionOptions.Value;
+        var version = typeof(OperatorCommands).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0];
+        await output.WriteLineAsync($"IntegracaoSolidesDP {version}");
         await output.WriteLineAsync($"Execução: {(execution.Interval is { } i ? $"a cada {i}" : $"às {string.Join(", ", execution.TimesOfDay ?? [])}")} ({execution.TimeZone})");
         await output.WriteLineAsync($"Modo: {(sync.DryRun ? "DRY-RUN (nada é enviado)" : "REAL")}; tipos de colaborador: {string.Join(",", sync.TiposColaborador)}; go-live: {sync.GoLiveDate?.ToString("yyyy-MM-dd") ?? "-"}");
         await output.WriteLineAsync($"Sólides DP: {solidesOptions.Value.BaseUrl}");

@@ -1,41 +1,42 @@
 name: ci
 
+# Cada push na main: testes → pacotes (Windows, Linux) → smoke test dos pacotes instalados de
+# verdade (serviço Windows, systemd, Docker, execução contra SQL Server + fake) → GitHub Release
+# v<VersionPrefix>.<execução> + imagem no GHCR. Pull requests rodam só os testes.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   DOTNET_NOLOGO: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
+  IMAGE: ghcr.io/rhsenso/integracaosolidesdp
 
 jobs:
-  build-and-test:
-    # Linux: os testes de SQL e ponta a ponta sobem SQL Server via Testcontainers,
-    # que precisa de containers Linux (indisponíveis nos runners Windows).
+  test:
+    # Linux: os testes de SQL e ponta a ponta sobem SQL Server via Testcontainers.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-
-      # Sem versão aqui: o global.json fixa o SDK.
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-
       - name: Restore
-        # --locked-mode falha se packages.lock.json não bater com os projetos.
         run: dotnet restore --locked-mode
-
       - name: Build
         run: dotnet build --no-restore -c Release
-
       - name: Test
-        run: >
-          dotnet test --no-build -c Release
-          --results-directory ./TestResults
-          --report-xunit-trx
-
+        run: dotnet test --no-build -c Release --results-directory ./TestResults --report-xunit-trx
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -43,3 +44,205 @@ jobs:
           name: test-results
           path: ./TestResults
           retention-days: 14
+
+  package:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Version
+        id: version
+        run: |
+          prefix=$(sed -n 's:.*<VersionPrefix>\(.*\)</VersionPrefix>.*:\1:p' Directory.Build.props)
+          echo "version=${prefix}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Publish
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          project=src/IntegracaoSolidesDP.Worker/IntegracaoSolidesDP.Worker.csproj
+          mkdir -p dist
+
+          # Windows: pasta self-contained + scripts do serviço.
+          win=out/win/IntegracaoSolidesDP
+          dotnet publish "$project" -c Release -r win-x64 --self-contained -p:Version="$VERSION" -o "$win"
+          rm -f "$win/appsettings.Development.json"
+          cp deploy/windows/*.ps1 INSTALL.md "$win/"
+          (cd out/win && zip -qr "../../dist/IntegracaoSolidesDP-${VERSION}-win-x64.zip" IntegracaoSolidesDP)
+
+          # Linux: pasta self-contained + unit do systemd e scripts.
+          lin=out/linux/integracao-solidesdp
+          dotnet publish "$project" -c Release -r linux-x64 --self-contained -p:Version="$VERSION" -o "$lin"
+          rm -f "$lin/appsettings.Development.json"
+          cp deploy/linux/* INSTALL.md "$lin/"
+          tar -C out/linux -czf "dist/IntegracaoSolidesDP-${VERSION}-linux-x64.tar.gz" integracao-solidesdp
+
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist
+          retention-days: 30
+
+  smoke-linux:
+    needs: package
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: dist
+
+      - name: Extract package
+        run: tar -C "$RUNNER_TEMP" -xzf "dist/IntegracaoSolidesDP-${VERSION}-linux-x64.tar.gz"
+
+      - name: Version of the package
+        run: test "$("$RUNNER_TEMP/integracao-solidesdp/IntegracaoSolidesDP" --version)" = "$VERSION"
+
+      - name: Smoke — binary against SQL Server + fake
+        run: scripts/smoke-package.sh binary "$RUNNER_TEMP/integracao-solidesdp"
+
+      - name: Smoke — Docker image against SQL Server + fake
+        run: |
+          docker build -f src/IntegracaoSolidesDP.Worker/Dockerfile --build-arg VERSION="$VERSION" -t integracao-solidesdp:smoke .
+          scripts/smoke-package.sh docker integracao-solidesdp:smoke
+
+      - name: Smoke — systemd install, update and uninstall
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/integracao-solidesdp"
+          sudo SKIP_CONFIG_CHECK=1 ./install.sh
+          sleep 10
+          systemctl is-active integracao-solidesdp
+          # Sem connection string configurada: o serviço continua no ar e registra o erro de configuração.
+          sudo journalctl -u integracao-solidesdp --no-pager | tee /tmp/journal.txt
+          grep -q "ConnectionStrings:Rhu" /tmp/journal.txt
+          echo '{"Sync":{"InstanceName":"preservado"}}' | sudo tee /opt/integracao-solidesdp/appsettings.json >/dev/null
+          sudo SKIP_CONFIG_CHECK=1 ./install.sh
+          grep -q preservado /opt/integracao-solidesdp/appsettings.json
+          systemctl is-active integracao-solidesdp
+          sudo ./uninstall.sh --remove-files
+          if systemctl list-unit-files | grep -q integracao-solidesdp; then echo "unit não foi removida"; exit 1; fi
+
+  smoke-windows:
+    needs: package
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.package.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: dist
+
+      - name: Extract package
+        shell: pwsh
+        run: Expand-Archive "dist/IntegracaoSolidesDP-$env:VERSION-win-x64.zip" -DestinationPath "$env:RUNNER_TEMP\pkg"
+
+      - name: Version and configuration check
+        shell: pwsh
+        run: |
+          $exe = "$env:RUNNER_TEMP\pkg\IntegracaoSolidesDP\IntegracaoSolidesDP.exe"
+          $version = & $exe --version
+          if ($version -ne $env:VERSION) { throw "versão $version, esperado $env:VERSION" }
+          # Banco inexistente: tem que validar a configuração (inclusive o fuso America/Bahia no Windows)
+          # e falhar só na conexão (exit 1; configuração inválida seria exit 2).
+          $env:ConnectionStrings__Rhu = "Server=127.0.0.1,1;Database=x;User Id=x;Password=x;Connect Timeout=3;Encrypt=False"
+          $output = & $exe --check-config | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 1) { throw "exit code $LASTEXITCODE, esperado 1" }
+          if ($output -notmatch "America/Bahia" -or $output -notmatch "\[ERRO\] Banco") { throw "saída inesperada" }
+          # O exit 1 acima é o esperado; o wrapper do pwsh encerraria o step com ele.
+          exit 0
+
+      - name: Install, update and uninstall the Windows service
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dir = "C:\svc\IntegracaoSolidesDP"
+          & "$env:RUNNER_TEMP\pkg\IntegracaoSolidesDP\install-service.ps1" -InstallDir $dir -SkipConfigCheck
+          Start-Sleep -Seconds 15
+          $svc = Get-Service IntegracaoSolidesDP
+          if ($svc.Status -ne "Running") { throw "serviço em $($svc.Status)" }
+          # Sem connection string: o serviço continua no ar e registra o erro no log ao lado do exe.
+          $log = Get-ChildItem "$dir\logs\*.log" | Select-Object -First 1
+          if (-not $log) { throw "log não foi criado em $dir\logs" }
+          Get-Content $log.FullName
+          if (-not (Select-String -Path $log.FullName -Pattern "ConnectionStrings:Rhu" -Quiet)) { throw "erro esperado não está no log" }
+
+          # Atualização preserva o appsettings.json do cliente.
+          Set-Content "$dir\appsettings.json" '{"Sync":{"InstanceName":"preservado"}}'
+          & "$env:RUNNER_TEMP\pkg\IntegracaoSolidesDP\install-service.ps1" -InstallDir $dir -SkipConfigCheck
+          if (-not (Select-String -Path "$dir\appsettings.json" -Pattern "preservado" -Quiet)) { throw "appsettings.json foi sobrescrito" }
+          if ((Get-Service IntegracaoSolidesDP).Status -ne "Running") { throw "serviço não voltou após atualizar" }
+
+          & "$env:RUNNER_TEMP\pkg\IntegracaoSolidesDP\uninstall-service.ps1" -InstallDir $dir -RemoveFiles
+          if (Get-Service IntegracaoSolidesDP -ErrorAction SilentlyContinue) { throw "serviço não foi removido" }
+          exit 0
+
+  release:
+    needs: [package, smoke-linux, smoke-windows]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ needs.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: dist
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          ## Instalação
+
+          - **Windows (serviço):** baixe \`IntegracaoSolidesDP-${VERSION}-win-x64.zip\`, extraia e rode \`install-service.ps1\` como Administrador.
+          - **Linux (systemd):** baixe \`IntegracaoSolidesDP-${VERSION}-linux-x64.tar.gz\`, extraia e rode \`sudo ./install.sh\`.
+          - **Docker:** \`docker pull ${IMAGE}:${VERSION}\`
+
+          Passo a passo completo no [INSTALL.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/INSTALL.md). Integridade dos arquivos: \`SHA256SUMS.txt\`.
+          EOF
+          gh release create "v${VERSION}" dist/* \
+            --title "IntegracaoSolidesDP ${VERSION}" \
+            --notes-file notes.md --generate-notes \
+            --target "${GITHUB_SHA}"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/IntegracaoSolidesDP.Worker/Dockerfile
+          build-args: VERSION=${{ env.VERSION }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:latest
