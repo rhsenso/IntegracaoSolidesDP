@@ -133,7 +133,9 @@ jobs:
           # Sem connection string configurada: o serviço continua no ar e registra o erro de configuração.
           sudo journalctl -u integracao-solidesdp --no-pager | tee /tmp/journal.txt
           grep -q "ConnectionStrings:Rhu" /tmp/journal.txt
-          echo '{"Sync":{"InstanceName":"preservado"}}' | sudo tee /opt/integracao-solidesdp/appsettings.json >/dev/null
+          # Atualização preserva o appsettings.json do cliente (marcado aqui, continuando válido).
+          sudo sed -i 's/"InstanceName": "default"/"InstanceName": "preservado"/' /opt/integracao-solidesdp/appsettings.json
+          grep -q preservado /opt/integracao-solidesdp/appsettings.json
           sudo SKIP_CONFIG_CHECK=1 ./install.sh
           grep -q preservado /opt/integracao-solidesdp/appsettings.json
           systemctl is-active integracao-solidesdp
@@ -186,8 +188,9 @@ jobs:
           Get-Content $log.FullName
           if (-not (Select-String -Path $log.FullName -Pattern "ConnectionStrings:Rhu" -Quiet)) { throw "erro esperado não está no log" }
 
-          # Atualização preserva o appsettings.json do cliente.
-          Set-Content "$dir\appsettings.json" '{"Sync":{"InstanceName":"preservado"}}'
+          # Atualização preserva o appsettings.json do cliente (marcado aqui, continuando válido).
+          (Get-Content "$dir\appsettings.json" -Raw) -replace '"InstanceName": "default"', '"InstanceName": "preservado"' | Set-Content "$dir\appsettings.json"
+          if (-not (Select-String -Path "$dir\appsettings.json" -Pattern "preservado" -Quiet)) { throw "marcação não aplicada" }
           & "$env:RUNNER_TEMP\pkg\IntegracaoSolidesDP\install-service.ps1" -InstallDir $dir -SkipConfigCheck
           if (-not (Select-String -Path "$dir\appsettings.json" -Pattern "preservado" -Quiet)) { throw "appsettings.json foi sobrescrito" }
           if ((Get-Service IntegracaoSolidesDP).Status -ne "Running") { throw "serviço não voltou após atualizar" }
